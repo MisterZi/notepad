@@ -26,61 +26,67 @@ class Post
     return post_types[type].new
   end
 
-  # new in v. 2
-  # Находит в базе запись по идентификатору или массив записей из базы данных, который можно например показать в виде таблицы на экране
-  def self.find(limit, type, id)
+  # new in v. 2.1
+  # Находит в базе запись по идентификатору
+  def self.find_by_id(id)
+
     db = SQLite3::Database.open(@@SQLITE_DB_FILE) # открываем "соединение" к базе SQLite
-    if id != nil
-      db.results_as_hash = true # настройка соединения к базе, он результаты из базы преобразует в Руби хэши
-      # выполняем наш запрос, он возвращает массив результатов, в нашем случае из одного элемента
-      result = db.execute('SELECT * FROM posts WHERE  rowid = ?', id)
-      # получаем единственный результат (если вернулся массив)
-      result = result[0] if result.is_a? Array
-      db.close
 
-      if result.empty?
-        puts "Такой id #{id} не найден в базе :("
-        return nil
-      else
-        # создаем с помощью нашего же метода create экземпляр поста,
-        # тип поста мы взяли из массива результатов [:type]
-        # номер этого типа в нашем массиве post_type нашли с помощью метода Array#find_index
-        post = create(result['type'])
+    db.results_as_hash = true # настройка соединения к базе, он результаты из базы преобразует в Руби хэши
+    # выполняем наш запрос, он возвращает массив результатов, в нашем случае из одного элемента
+    result = db.execute('SELECT * FROM posts WHERE  rowid = ?', id)
+    # получаем единственный результат (если вернулся массив)
+    result = result[0] if result.is_a? Array
+    db.close
 
-        #   заполним этот пост содержимым
-        post.load_data(result)
-
-        # и вернем его
-        return post
-      end
-
-      #   эта ветвь выполняется если не передан идентификатор
+    if result == nil # прерываем программу, если не получили результат
+      puts "Такой id #{id} не найден в базе :("
     else
+      # создаем с помощью нашего же метода create экземпляр поста,
+      # тип поста мы взяли из массива результатов [:type]
+      # номер этого типа в нашем массиве post_type нашли с помощью метода Array#find_index
+      post = create(result['type'])
 
-      db.results_as_hash = false # настройка соединения к базе, он результаты из базы НЕ преобразует в Руби хэши
+      #   заполним этот пост содержимым
+      post.load_data(result)
 
-      # формируем запрос в базу с нужными условиями
-      query = 'SELECT rowid, * FROM posts '
-
-      query += 'WHERE type = :type ' unless type.nil? # если задан тип, надо добавить условие
-      query += 'ORDER by rowid DESC ' # и наконец сортировка - самые свежие в начале
-
-      query += 'LIMIT :limit ' unless limit.nil? # если задан лимит, надо добавить условие
-
-      # готовим запрос в базу, как плов :)
-      statement = db.prepare query
-
-      statement.bind_param('type', type) unless type.nil? # загружаем в запрос тип вместо плейсхолдера, добавляем лук :)
-      statement.bind_param('limit', limit) unless limit.nil? # загружаем лимит вместо плейсхолдера, добавляем морковь :)
-
-      result = statement.execute! #(query) # выполняем
-      statement.close
-      db.close
-
-      return result
+      # и вернем его
+      return post
     end
+
   end
 
+  # new in v. 2.1
+  # Находит массив записей из базы данных, который можно например показать в виде таблицы на экране
+  def self.find_all(limit, type)
+    db = SQLite3::Database.open(@@SQLITE_DB_FILE) # открываем "соединение" к базе SQLite
+    db.results_as_hash = false # настройка соединения к базе, он результаты из базы НЕ преобразует в Руби хэши
+
+    # формируем запрос в базу с нужными условиями
+    query = 'SELECT rowid, * FROM posts '
+
+    query += 'WHERE type = :type ' unless type.nil? # если задан тип, надо добавить условие
+    query += 'ORDER by rowid DESC ' # и наконец сортировка - самые свежие в начале
+
+    query += 'LIMIT :limit ' unless limit.nil? # если задан лимит, надо добавить условие
+
+    #Исключение на ошибки в базе (new in v. 2.2)
+    begin
+      # готовим запрос в базу, как плов :)
+      statement = db.prepare query
+    rescue SQLite3::SQLException => error
+      abort "Ошибка! #{error} \nНе удалось выполнить запрос в базе #{@@SQLITE_DB_FILE}"
+    end
+
+    statement.bind_param('type', type) unless type.nil? # загружаем в запрос тип вместо плейсхолдера, добавляем лук :)
+    statement.bind_param('limit', limit) unless limit.nil? # загружаем лимит вместо плейсхолдера, добавляем морковь :)
+
+    result = statement.execute! #(query) # выполняем
+    statement.close
+    db.close
+
+    return result
+  end
 
   # конструктор
   def initialize
@@ -127,16 +133,21 @@ class Post
     db = SQLite3::Database.open(@@SQLITE_DB_FILE) # открываем "соединение" к базе SQLite
     db.results_as_hash = true # настройка соединения к базе, он результаты из базы преобразует в Руби хэши
 
-    # запрос к базе на вставку новой записи в соответствии с хэшом, сформированным дочерним классом to_db_hash
-    db.execute(
-      'INSERT INTO posts (' +
-        to_db_hash.keys.join(', ') + # все поля, перечисленные через запятую
-        ') ' +
-        ' VALUES ( ' +
-        ('?,'*to_db_hash.keys.size).chomp(',') + # строка из заданного числа _плейсхолдеров_ ?,?,?...
-        ')',
-      to_db_hash.values # массив значений хэша, которые будут вставлены в запрос вместо _плейсхолдеров_
-    )
+    #Исключение на ошибки в базе (new in v. 2.2)
+    begin
+      # запрос к базе на вставку новой записи в соответствии с хэшом, сформированным дочерним классом to_db_hash
+      db.execute(
+        'INSERT INTO posts (' +
+          to_db_hash.keys.join(', ') + # все поля, перечисленные через запятую
+          ') ' +
+          ' VALUES ( ' +
+          ('?,'*to_db_hash.keys.size).chomp(',') + # строка из заданного числа _плейсхолдеров_ ?,?,?...
+          ')',
+        to_db_hash.values # массив значений хэша, которые будут вставлены в запрос вместо _плейсхолдеров_
+      )
+    rescue SQLite3::SQLException => error
+      abort "Ошибка! #{error} \nНе удалось выполнить запрос в базе #{@@SQLITE_DB_FILE}"
+    end
 
     insert_row_id = db.last_insert_row_id
 
